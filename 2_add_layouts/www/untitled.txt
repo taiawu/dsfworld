@@ -1,0 +1,1039 @@
+options(shiny.maxRequestSize = 30*1024^2)  # increases maximum upload size to 30 MB, delete if this is never necessary
+library(shinythemes) # probably always necessary
+#library("ggvis") # only transiently necessary
+library(shiny)
+library(reshape2) # for data frame handling
+library(ggplot2) # for plotting
+library(platetools) # for plotting play layouts
+library(viridis) # color schemes 
+library(shinydashboard) # sidebar layouts
+library(naniar) # to replace values with NAs
+library(rhandsontable)
+library(shinyWidgets) # background color on the front page
+library(shinyBS) # for popovers (instructions and details upon clicking)
+
+library(outliers)
+library(readr) # to read files into dataframes
+library(signal) # contains the savitsky-golay filter, whichs masks poly() in stats
+library(stats)
+library(tibble)
+library(purrr)
+library(SciViews) # contains ln function
+library(DT)
+
+# scripts used for this website
+source("DSF_data_analysis_v4.R")
+source("DSF_data_model_v2.R")
+source("DSF_data_parser.R")
+source("DSF_replicate_handling.R")
+source("DSF_plate_plots.R")
+
+# function to place input boxes next to one another
+textInputRow<-function (inputId, label, value = "") 
+{
+  div(style="display:inline-block",
+      tags$label(label, `for` = inputId), 
+      tags$input(id = inputId, type = "text", value = value,class="input-xsmall"))
+}
+
+# tags$head(
+#   tags$style(HTML(".my_style_1{ 
+#                   background-color: #ecf0f1 ;
+#                   }")))
+
+# the shinyApp function is run once, when you launch your app
+# the server fuction is run once each time a user visits your app
+# R expressions inside the render* functions are run many times. Shiny runs them once each time a user changes the value of the widget. 
+#### therefore: only put absolutely necessary  things inside of render functions #####
+
+# plot interactions: https://gallery.shinyapps.io/093-plot-interaction-basic/
+#shinythemes::themeSelector(),
+
+# User interface -------------------------------------------------------------------------------
+ui <- fluidPage(theme = "bootstrap_scaled.css",
+  #theme = shinytheme("flatly"), # set the page color theme
+  navbarPage( 
+    "DSFworld", # the title of the whole web page
+# ================================================================================================ 
+# # # Data Analysis --------------------------------------------------------------------------------
+tabPanel("Home",
+htmlOutput("homepage_text")
+  ),
+             
+ # Data Analysis --------------------------------------------------------------------------------
+      tabPanel("Data analysis",
+               # setBackgroundColor(
+               #   color = c("#ffff", "#ffff"),
+               #   gradient = "linear",
+               #   direction = c("top")
+               # ),
+             # if there was a sidebar panel, the code to establish it would go here
+             
+               mainPanel(
+                   tags$head(tags$script(src="general.js")), # call the script which makes the tabset panels width 12 instead of 8
+                   div(class="delParentClass",
+                       
+                    tabsetPanel(id = "inTabset", # tabset for all analysis sub-tabs
+# Upload data tab -----
+                            tabPanel("Upload data", value = "upload_data_tab",
+                          
+                            sidebarLayout( # Sidebar layout with input and output definitions
+                            sidebarPanel(# Sidebar panel for inputs
+
+                              
+                              fileInput("file1", "Choose CSV File", # Input: Select a file
+                                        multiple = FALSE,
+                                        accept = c("text/csv",
+                                                   "text/comma-separated-values,text/plain",
+                                                   ".csv")),
+                            div(style="display:inline-block",downloadButton("samplefile", "Download example file", width = '50%',style="font-size: 11px; color: #fff;")),
+                            div(style="display:inline-block", actionButton('help1', HTML('<strong><i>Help</strong></i>'), style = "color: #2c3e50; background-color: #ecf0f1; border-color:#ecf0f1")),
+                            
+                            bsTooltip("help1", HTML("To analyze your data, please upload it in .tsv or .csv format, with Temperature in the first column and raw fluorescence measurements in the remaining columns. A correctly-formatted example file can be downloaded at left. Some minor reformatting can be done after uploading using the Reformatting assistance options. DSFworld can accept and reformat data files exactly as they are exported (still in .csv) from the instruments listed in under Supported Reformatting (at left). See the Instructions tab for more information. Incompatible with Explorer versions 9 and earlier."),
+                                      "right", options = list(container = "body"), trigger = "hover"),
+                              
+
+                              HTML("<h2><strong>Reformatting assistance</strong></h2>"),
+
+                              checkboxInput("header", "Header", TRUE), # Input: Checkbox if file has header
+                              radioButtons("sep", "Separator",  # Input: Select separator
+                                           choices = c(Comma = ",",
+                                                       Semicolon = ";",
+                                                       Tab = "\t"),
+                                           selected = ","),
+                              radioButtons("quote", "Quote",  # Input: Select quotes
+                                           choices = c(None = "",
+                                                       "Double Quote" = '"',
+                                                       "Single Quote" = "'"),
+                                           selected = '"'),
+                              radioButtons("reformat", "Supported reformatting (if applicable, select instrument)", # Input: Select type of reformatting necessary
+                                           choices = c(None = "none",
+                                                       #qTower = "qTower",
+                                                       Biorad = "biorad",
+                                                       Stratagene = "stratagene"
+                                                       ),
+                                           selected = "none"),
+                              checkboxInput("cycle_to_T", HTML("<strong>Convert cycle number to temperature? (if yes, specify below)</strong>"), FALSE),
+                              textInputRow(inputId="start_T", label=HTML("<h4>            Starting Temp (C)</h4>"), value = 25),
+                              
+                              textInputRow(inputId="increment_T", label=HTML("<h4>Increase per cycle (C)</h4>"), value = 1),
+                              
+                              htmlOutput("once_uploaded"),
+
+                              actionButton('jumpToAnalysis', 'Analyze',
+                                           icon("chart-area"), width = '100%', style="font-size: 11px; color: #fff; background-color: #337ab7; border-color: #2e6da4")
+                            ),  # end sidebar panel
+                            
+                            # Main panel for displaying outputs
+                            mainPanel(
+                              tags$style(type='text/css', "#instructions {font-size: 18px; line-height: +2;} "),
+                              #HTML("instructions"),
+                              dataTableOutput("contents"), style = "overflow-x: scroll;"
+                            ) # end main panel
+                          ) # end sidebarLayour
+                 ), # end tab panel (tabset, div, main still remaining)
+                 
+# Analysis visualzation panel ----------              
+    tabPanel("Analyze", value = "analysis_tab",
+                                   fluidRow(
+                                     column(3, # nams and replicates, and Tm table
+                                            wellPanel(
+                                              
+                                              
+                                              div(style="display:inline-block", HTML("<h2>Name and set replicates</h2>")),
+                                              div(style="display:inline-block", actionButton('help2', HTML('<h3><strong><i>Help</strong></i></h3>'), style = "color: #2c3e50; background-color: #ecf0f1; border-color:#ecf0f1")),
+                                              
+                                              bsTooltip("help2", HTML("Each row corresponds to a single column in the input data. Enter identical names for wells containing replicates in the New_names column below. If no name is given, column names from the originally-uploaded file are used. If you would like to generate a plate-view plot, enter corresponding well positions (e.g. A1, B1 . . .) in the Well positions column. More detailed instructions are available in the Instructions tab."),
+                                                        "right", options = list(container = "body"), trigger = "hover"),
+
+                                              div(
+
+                                                rHandsontableOutput("hot_names_output"),style = "height:200px; overflow-y: scroll; overflow-x: scroll;"
+                                              ), # end div
+                                              # Input: Select separator 
+                                              HTML(""),
+                                              radioButtons("platetype", "To make plate-view plot, select plate type:",
+                                                           choices = c('96-well' = 96,
+                                                                       '384-well' = 384),
+                                                           selected = 96),
+                                            actionButton("goButton", "Update names &/or wells", style="font-size: 11px;  background-color: #18bc9c; border-color: #18bc9c")
+                                            ),  # end wellPanel
+    
+                                            wellPanel(
+                                              # bsTooltip("TmPanel", HTML("Apparent melting temperatures can be calculated by either first derivative or Boltzmann sigmoid. The presence of potential double-transitions is automatically detected and handled only for Boltzmann sigmoid fits. However, the Boltzmann fitting is slow (~10 seconds per curve), so this is not recommended for large data sets. See the About the Analysis tab for more information."),
+                                              #           "right", options = list(container = "body"), trigger = "click"),
+                                              div(
+                                                
+                                                div(style="display:inline-block", HTML("<h2>Apparent Tm</h2>")),
+                                                div(style="display:inline-block", actionButton('help3', HTML('<h3><strong><i>Help</strong></i></h3>'), style = "color: #2c3e50; background-color: #ecf0f1; border-color:#ecf0f1")),
+                                                
+                                                bsTooltip("help3", HTML("Apparent melting temperatures can be calculated by either first derivative or Boltzmann sigmoid. The presence of potential double-transitions is automatically detected and handled only for Boltzmann sigmoid fits. However, the Boltzmann fitting is slow (~10 seconds per curve), so this is not recommended for large data sets. See the About the Analysis tab for more information."),
+                                                          "right", options = list(container = "body"), trigger = "hover"),
+                                                
+                                                
+                                                selectInput("Tm_type", "Select analysis method",
+                                                            choices = c("First derivative", "Boltzmann sigmoid (~10 seconds/condition, not recommended for large datasets)"),
+                                                            selected = "First derivative"),
+                                                dataTableOutput("tm_table_render"), style = "height:400px; overflow-y: scroll; overflow-x: scroll;"
+                                              ) # end div
+                                            ), # end wellPanel
+                                            
+                                            # button to jump to full downloads page
+                                            actionButton('jumpToDownloads', 'Download results',
+                                                         icon("download"), style="font-size: 11px, color: #fff; background-color: #337ab7; border-color: #2e6da4")
+                                     ), # end column
+                                     
+                                       column(9, # results plots
+                                              wellPanel(
+                                                  style = "position:relative",
+                                                  selectInput("dataset_3", "Choose a plot",
+                                                              choices = c("Raw data", "First derivative", "Plate-view heat map (must define wells)", "Raw data, replicates averaged (slow for large datasets)","First derivative, replicates averaged (slow for large datasets)"),
+                                                              selected = "Raw data"),
+                                                  div(
+                                                    style = "position:relative",
+                                                    plotOutput("graph1_render", 
+                                                               hover = hoverOpts("plot_hover1", delay = 1, delayType = "debounce")),
+                                                    uiOutput("hover_info1")
+                                                  ),
+                                                  width = 7
+                                              ), # end wellPanel
+
+                                              wellPanel(
+                                                  selectInput("dataset_4", "Choose a plot",
+                                                              choices = c("Raw data", "First derivative", "Plate-view heat map (must define wells)", "Raw data, replicates averaged (slow for large datasets)","First derivative, replicates averaged (slow for large datasets)"),
+                                                              selected = "First derivative"),
+                                              div(
+                                                style = "position:relative",
+                                                plotOutput("graph2_render", 
+                                                           hover = hoverOpts("plot_hover2", delay = 1, delayType = "debounce")),
+                                                uiOutput("hover_info2")
+                                              ),
+                                              width = 7
+                                              ) # end wellPanel
+                                     ) # end column
+               )# end fluidRow
+    ), # end tabpanel
+# Download results tab ------
+     tabPanel("Download results", value = "downloads_tab",
+                          # Sidebar layout with input and output definitions
+                          sidebarLayout(
+                            # Sidebar panel for inputs 
+                            sidebarPanel(HTML("<h2><strong>Select and preview downloads</h2></strong>"),
+                                         HTML("<i><h3>To download plots, right-click on them directly in the analysis window and select 'save'. </i></h3>"),
+                              # Input: Choose dataset 
+                              selectInput("dataset1", "Quick results, averaged by user-defined replicates",
+                                          choices = c("Melting temperatures (by first derivative)", "Melting temperatures (by Boltzmann--slow for large datasets)", "Smoothed raw data (RFU vs T)", "First derivative of smoothed (dRFU/dT vs T)")),
+                              downloadButton("downloadData1", "Download quick result",style="font-size: 11px;  color: #fff; background-color: #2e6da4; border-color: #2e6da4"),
+                              htmlOutput("blank_line_3"),
+                              selectInput("dataset2", "Supplemental files",
+                                          choices = c("Melting temperatures (by first derivative), no replicate averaging",  "Melting temperatures (by Boltzmann--slow for large datasets), no replicate averaging", "Smoothed raw data (RFU vs T), no replicate averaging", "First derivative of smoothed (dRFU/dT vs T), no replicate averaging", "Unsmoothed raw data (RFU vs T), no replicate averaging", "Smoothed data truncated at maximum (useful for sigmoid fitting), replicate-averaged","Smoothed data truncated at maximum (useful for sigmoid fitting), no replicate averaging")),
+                              downloadButton("downloadData2", "Download supplemental file", style="font-size: 11px;  color: #fff; background-color: #2e6da4; border-color: #2e6da4")
+                            ), # end sidebarPanel 
+                            
+                            # Main panel for displaying outputs 
+                            mainPanel(HTML("<h3><strong>See the 'About the analysis' tab for information about the downloadable results</strong></h3>"),
+                              tabsetPanel(
+                                tabPanel("Preview: quick downloads", dataTableOutput("table_set1"), style = "overflow-x: scroll;"),
+                                tabPanel("Preview: supplemental files", dataTableOutput("table_set2"), style = "overflow-x: scroll;")
+                              )
+                            ) # end main panel
+                          ) # end sidebarLayout
+                 ), # end tabPanel
+
+# About the analysis ------
+      tabPanel("About the analysis", value = "about_analysis_tab",
+               tags$style(type='text/css', "#aboutanalysis {font-size: 28px; line-height: +2;} "),
+               htmlOutput("aboutanalysis")
+                ), # end tabPanel
+tabPanel("Instructions", value = "about_analysis_tab",
+         tags$style(type='text/css', "#aboutanalysis {font-size: 28px; line-height: +2;} "),
+         HTML("<h3>Some instructions will go here</3> If there is anything in particular which could use more explanation, please let me know!")
+) # end tabPanel
+
+
+# wrapping up full analysis tab ----
+) # end tabset Panel (contains all "analysis sub-panels)
+) # end div (where the width is set)
+) # end main panel
+), # end the full "Data analysis" tab panel 
+# End Data Analysis
+
+# ================================================================================================  
+    # Interactive modeling  ------------------------------------------------------------------------
+    tabPanel("Learn: interactive data modeling",
+             mainPanel(
+               
+               tags$head(tags$script(src="general.js")), # call the script which makes the tabset panels width 12 instead of 8
+               div(class="delParentClass",
+                   
+               tabsetPanel(
+# about the data modeling: welcome page ------
+                 tabPanel("About the data modeling",
+                          #tags$style(type='text/css', "#modelpage_text {font-size: 24px; line-height: +2;} "),
+                          htmlOutput("modelpage_text")
+                 
+                 ), # end tabPanel
+# DSF data modeler  -----------------------------------------------------------------------
+                 tabPanel("DSF data modeler",
+                          fluidRow(
+                            # left panel: interactive sliders
+                            column(4,
+                                   wellPanel(
+                                     h3(HTML("<strong>Protein biophysical parameters</strong>")),
+                                     sliderInput("dHu", "Enthalpy of unfolding (kJ/mol)",
+                                                 10, 500, 200, step = 10),
+
+                                     bsTooltip("dHu", "Enthalpy of the Native to Reversibly Unfolded state. The enthalpy of the Reversibly Unfolded to Irreversibly Unfolded states is considered to be 0 in this model, a typical simplification.",
+                                               "right", options = list(container = "body")),
+                                     
+                                     sliderInput("E", "Activation energy of unfolding (kJ/mol)",
+                                                 10, 500, 100, step = 10),
+                                     
+                                     bsTooltip("E", "The energy barrier between the Reversibly Unfolded and Irreversibly Unfolded states. This model assumes no signficant energy barrier between Native and Reversibly Unfolded states.",
+                                               "right", options = list(container = "body")),
+                                     
+                                     sliderInput("T_half", "Melting temperature (C)",
+                                                 25, 92, 55, step = 1),
+                                    
+                                     bsTooltip("T_half", "The thermodynamic melting temperature. That is, the temperature at which the molar ratio of Native:Reversibly Unfolded states would be 1:1 at equilibrium. Experimentally, this is often measured using guanidinium hydochloride denaturation.",
+                                               "right", options = list(container = "body")),
+                                     
+                                     sliderInput("T_star", "Temperature at which k = 1 min-1",
+                                                 25, 95, 75, step = 1),
+                                     
+                                     bsTooltip("T_star", "A kinetic parameter relating the absolute rate of irreversible unfolding to temperature. In this model, this value changes with temperature according to the Arrhenius Equation.",
+                                               "right", options = list(container = "body")),
+                                     
+                                     sliderInput("v", "Temperature ramp rate (C/min)",
+                                                 0, 10, 1, step = 0.1),
+
+                                     bsTooltip("v", "The thermocycling ramp rate used in the simulated DSF experiment.",
+                                               "right", options = list(container = "body"))
+                                   ),
+                                   
+                                   wellPanel(
+                                     h3(HTML("<strong>Dye detection of protein states</strong>")),
+                                     sliderInput("n_N", "Detection of native state",
+                                                 0, 1, 0, step = 0.1),
+                                     bsTooltip("n_N", "The degree of dye binding and activation observed to the native state of the protein. Detection of the native state underlies many high background issues with DSF for hydrophobic proteins.",
+                                               "right", options = list(container = "body")),
+                                     sliderInput("n_U", "Detection of reversible unfolded state", 0, 1, 1, step = 0.1),
+                                     bsTooltip("n_U", "The degree of dye binding and activation observed to the reverislby unfolded state of the protein. Theoretically, this is the only state detected in DSF experiments. Low detection of this state may underlie the invisibility of some proteins in DSF.",
+                                               "right", options = list(container = "body")),
+                                     sliderInput("n_F", "Detection of irreversible unfolded state",
+                                                 0, 1, 0.5, step = 0.1),
+                                     bsTooltip("n_F", "The degree of dye binding and activation observed to the irreversibly unfolded state of the protein. Theoretically this state is not detected, but in reality this parameter varies from protein to protein.",
+                                               "right", options = list(container = "body"))
+                                   ) # end wellPanel
+                            ),
+                            
+                            # middle panel: visualization
+                            column(8, 
+                                   tabsetPanel(
+                                     tabPanel("Plot", # may have to change this to be unique?
+                                              #h4("The interactive plot will be here"),
+                                              plotOutput("dsf_model_plot", height = '500px')
+                                     ),
+                                     tabPanel("Learn about this model",
+                                              #title = 'MathJax Examples',
+
+
+                                              withMathJax(
+                                              helpText('DSF is a simple readout for a complex phenomenon. This portion of the website is meant to showcase how the processes underlying DSF--thermodynamics and kinetics of unfolding, and relative dye detection of various protein states--can ultimately effect the data obtained.'),
+                                              helpText(''),
+                                              helpText('The unfolding of most proteins is highly complex, with many potential unfolded states and as many or more pathways to get to them. However, many simplified models of unfolding have been described, the simplest of which is:'),
+                                              helpText('$${Native \\ (folded) \\rightleftharpoons Unfolded}$$[model 1]'),
+                                              helpText('In model 1, the unfolding transition is reversible, and the folded and unfolded state are assumed to be at equilibrium. That is, model 1 is a simple two-state thermodynamic system.'),
+                                              helpText('However, when proteins denature upon heating (like in a DSF experiment) the kinetcs of unfolding often plays an important role as well. Therefore, the relative population of each state is dependent on not only the thermodynamics of the protein fold but also its kinetics, as well as the temperature, and the ramp rate used to melt the protein.'),
+                                              helpText('This mixed thermodynamic-kinetic process of unfolding is described in a series of models called Lumry-Eyring models, which are distinct in that they contain both reversible and irreversible steps. The DSF data modeling in this section is based on the simplest of these Lumry-Eyring models:'),
+                                              helpText('$${Native \\rightleftharpoons\\ reversible \\ unfolded \\longrightarrow\\ irreversible \\ unfolded}$$[model 2] (the one used in this data modeling section)'),
+                                              helpText('An aside: the influence of kinetics on heat denaturation has some important (if theoretical) rammifications: because the unfolding process is not purely thermodynamic, it is unwise to assume that the folded:unfolded ratio observed at any given temperature is representative of the equilibrium value. Therefore, because the definition of a protein Tm is the temperature at which the \\(\\Delta G\\) of folding is zero, and the protein is therefore 50% folded, 50% unfolded at equilibrium, the Tm determined with any heat-based denaturation method (not just DSF; also heat-based circular dichroism and differential scanning calorimetry), is technically a "Tm apparent", not a pure Tm.'),
+                                              helpText(''),
+                                              helpText('The first plot in this DSF data model, which describes the relative population of folded, reversibly-unfolded, and irreversibly-unfolded states, is based on a set of theoretical papers which modeled Differential Scanning Calorimetry based on both thermodynamic and kinetic properties of a protein. The equations and their full derivations can be found at (cite!), but for convenience, are summarized below.'),
+                                              helpText('$${Relative \\ population \\ of \\ the \\ native \\ state: N(T)} =  \\frac{1}{K+ 1} - e^{L(T)}$$      [Eq. 1]'),
+                                              helpText('$${Relative \\ population \\ of \\ the \\ reversibly \\ unfolded \\ state:  U(T)} =  \\frac{K}{K+ 1} - e^{L(T)}$$      [Eq. 2]'),
+                                              helpText('$${Relative \\ population\\  of\\  the\\  irreversibley \\ unfolded\\  state: F(T)} =  1 - e^{L(T)}$$      [Eq. 3]'),
+                                              helpText('Where $${L(T) = } -\\frac{1}{v}\\int_{T_o}^{T}\\frac{kK}{K+ 1} \\,dT$$'), 
+                                              helpText('And where the equilibrium constant K is described in the typical manner: $${K = } \\frac{[U]}{[N]} = \\frac{X_U}{X_N} = e^{- \\frac{\\Delta H_U}{R}  \\left[\\frac{1}{T} - \\frac{1}{T_{1/2}}\\right]}$$      [Eq. 4]'),
+                                              helpText('And where dependence of the rate constant k on temperature is described by the Arrhenius equation: $${k = } e^{-\\frac{E}{R}  \\left[\\frac{1}{T} - \\frac{1}{T^*}\\right] }$$      [Eq. 5]'),
+                                              helpText('From equations [1] - [5], we get the relative population of each of the three folding states.'),
+                                              helpText('For the DSF model presented here, these relative populations are then multiplied by a constant which describes the degree to which that state is detected by the DSF dye. This constant encompasses both binding and associated increase in fluorescence as these two parameters are not distinguished in a typical DSF experiment.'),
+                                              helpText('Theoretically, the dye-detection constant is zero for the native state, one for the unfolded state, and zero again for the final state.'),
+                                              helpText('In reality, these constants vary from protein to protein, and these variations can influence the DSF data obtained even for proteins with identical relative population of folded states at a given temperature.'),
+                                              helpText('This influence is calculate by the following equations:'),
+                                              helpText('$${Detection \\ of \\ the \\ native \\ state: RFU_{Native}(T, t) = S(T)[n_N * N(T, t)]} $$      [Eq. 6]'),
+                                              helpText('$${Detection \\ of \\ the \\ reversible \\ unfolded \\ state: RFU_{Unfolded}(T, t) = S(T)[u_N * U(T, t)]}$$      [Eq. 7]'),
+                                              helpText('$${Detection \\ of \\ the \\ irreversible \\ unfolded \\ state: RFU_{Final}(T, t) = S(T)[f_N * F(T, t)]} $$      [Eq. 8]'),
+                                              helpText('Where T is temperature, and t is time (as the protein unfolding state at a particular temperature can depend on ramp rate)'),
+                                              helpText('And where S(T) is a linear function which corrects for the experimentally observed decay in fluorescence of SYPRO Orange with temperature, independent of the number or type of binding sites available to it:'),
+                                              helpText('$${S(T) = }1- 0.9 \\left[\\frac{T}{70}\\right] $$      [Eq. 9]'),
+                                              helpText('The single line on the second plot is the sum of equations 6-8, and is meant to represent the DSF data observed for the unfolding process described in the first plot. That is:'),
+                                              helpText('$${RFU_{total}(T, t) = RFU_{Native}(T, t) + RFU_{Unfolded}(T, t) + RFU_{Final}(T, t)} $$      [Eq. 8]'),
+                                              helpText('The third and final plot is simply the first derivative of the second plot (equations 6-8), as the first derivative if often used to calculate the apparent Tm of the protein.')
+                                     ), style = "overflow-y:scroll; max-height: 500px") # end tabset Panel
+                                              ) # end tabset Panel
+                            ) # end column
+                            ) # end fluidRow
+                 ), # end tabPanel
+                 
+# dG vs T modeler  ------
+                 tabPanel("dG versus T modeler", 
+                          fluidRow(
+                            #left panel: interactive sliders
+                            column(3,
+                                   wellPanel(
+                                     h4("Protein biophysical parameters"),
+                                     sliderInput("dHu_2", "Enthalpy of unfolding (kJ/mol)",
+                                                 10, 500, 70, step = 10),
+                                     bsTooltip("dHu_2", "Enthalpy of the transition from the Folded to Unfolded state. Unlike in the DSF data model, only these two states are considered here.",
+                                               "right", options = list(container = "body")),
+                                     sliderInput("T_half_2", "Melting temperature (C)",
+                                                 25, 95, 55, step = 1),
+                                     bsTooltip("T_half_2", "The thermodynamic melting temperature of the protein. That is, the temperature at which the raito of Folded:Unfolded at equilibrium is 1:1.",
+                                               "right", options = list(container = "body")),
+                                     sliderInput("dCp", "Change in heat capacity (Cp) with melting (kJ/mol)",
+                                                 1, 20, 7.5, step = 1),
+                                     bsTooltip("dCp", "Upon unfolding, proteins undergo a change in heat capacity. The influence of this parameter gives the dG versus T relationship its characteristic curved shape.",
+                                               "right", options = list(container = "body")),
+                                     sliderInput("Nres", "Number of residues in protein",
+                                                 0, 800, 122, step = 1),
+                                     bsTooltip("Nres", "Experimentally, the dG versus T relationship has been found to depend on the size of the protein; 100 residues equates to approximately a 100 kDa protein. ",
+                                               "right", options = list(container = "body"))
+                                   ) # end well panel
+                            ), # end column
+                            
+                            # middle panel: interactive visualizations
+                            column(9,
+                                   tabsetPanel(
+                                     tabPanel("delG Plot",
+                                              plotOutput("dG_model_plot", height = '500px')
+                                     ),
+                                     tabPanel("Learn about this model", 
+                                              
+                                              withMathJax(
+                                              #\\(\\sqrt{2}\\)
+                                              helpText('This model is intended to illustrate how the \\(\\Delta G\\) of a protein fold varies with temperature, and how this relationship can give rise to the familiar sigmoidal shape of unfolding transitions.'),
+                                              helpText('Unlike the DSF data modeling tab, which considers both thermodynamic and kinetic parameters of unfolding, this section uses a simplified model where the protein has only two possible states--folded, and unfolded--and these states are always at equilibrium. That is:'),
+                                              helpText(' Folded \\(\\rightleftharpoons\\) Unfolded'),
+                                              helpText('Through the 1970s and 1980s, the thermal unfolding of over 100 proteins was monitored by Differential Scanning Calorimetry.'),
+                                              helpText('When considered in sum, these experiments suggested that the relationship between temperature and the \\(\\Delta G\\) of folding for a particular protein could be described in terms of (1)the observed melting temperature of the protein, (2) the enthalpy of folding, and (3) the non-zero change in heat capacity associated with protein unfolding.'),
+                                              helpText('This relationship could be generally described by the following equation, which is displayed in the top plot in this section:'),
+                                              helpText('$${\\Delta G(T)  = } \\Delta H_U \\left[\\frac{T_{1/2} - T}{T_U}\\right] - \\Delta C_p  \\left[ T_{1/2} - T \\left( 1- \\ln \\left[ \\frac{T}{T_{1/2}} \\right] \\right)  \\right]$$'),
+                                              helpText('From there, the fraction of protein folded at equilibrium at a given temperature can be solved using the Gibbs-Hemholtz equation:'),
+                                              helpText('$${\\Delta G  = } - RT \\ln (K)$$'),
+                                              helpText('Specifically, the Gibbs-Hemholtz equation can be re-arraged to yield the equilibrium constant, K:'),
+                                              helpText('$$K  =  e^ {- \\frac{\\Delta G}{RT}}$$'),
+                                              helpText('For a two-state system, the equilibrium constant K is defined as:'),
+                                              helpText('$${F_{unf} = \\frac{K}{K+ 1}}$$'),
+                                              helpText('From which the relative population of the folded and unfolded states can be solved.')
+                                              ), style = "overflow-y:scroll; max-height: 500px")# end tabPanel
+                                     
+                                   ) # end tabset panel
+                            ) # end  column
+                          ) # end fluid row
+                 ) # end tab panel
+
+
+
+# wrapping up data modeling section ------
+) # end tabsetPanel
+) # end div
+) # end main panel
+) # end tabPanel
+# End Interactive modeling  
+
+  ) # end navbarPage
+  ) # end fluidPage, end ui
+
+# ================================================================================================================================================================================================
+# ================================================================================================================================================================================================
+# ================================================================================================================================================================================================
+
+server <- function(input, output, session) {
+  
+# Buttons to navigate between tabs-----------------------------------------------------------------------------------------------
+# from upload page to naming and setting replicates
+observeEvent(input$jumpToNames, {
+    updateTabsetPanel(session, "inTabset",
+                      selected = "name_tab")
+  })
+  
+  # from upload page to analysis
+  observeEvent(input$jumpToAnalysis, {
+    updateTabsetPanel(session, "inTabset",
+                      selected = "analysis_tab")
+  })
+  
+  # from naming and setting replicates  page to analysis 
+  observeEvent(input$jumpToAnalysis2, {
+    updateTabsetPanel(session, "inTabset",
+                      selected = "analysis_tab")
+  })
+  
+  observeEvent(input$jumpToDownloads, {
+    updateTabsetPanel(session, "inTabset",
+                      selected = "downloads_tab")
+  })
+  
+  # labels for the buttons
+  output$once_uploaded <- renderUI({
+    HTML("<h3><strong>Once data is uploaded . . . </h3></strong>") })
+  
+  output$blank_line <- renderUI({
+    HTML("<h4> </h4>") })
+  
+  output$blank_line_2 <- renderUI({
+    HTML("<h4>  </h4>") })
+  
+  output$blank_line_3 <- renderUI({
+    HTML("<h1>  </h1>") })
+  
+  # end Buttons to navigate between tabs-----------------------------------------------------------------------------------------------  
+  # Uplading user data-----------------------------------------------------------------------------------------------  
+  reformatInput <- reactive({
+    switch(input$reformat,
+           "none" = none(),
+           "qTower" = reformat_qTower(),
+           "First derivative" = reformat_biorad(),
+           "Melting temperatures" = reformat_stratagene()
+    )
+  })
+  
+  data_raw <- reactive({
+    req(input$file1)
+    tryCatch(
+      {
+        df_input <- read.csv(input$file1$datapath,
+                             header = input$header,
+                             sep = input$sep,
+                             quote = input$quote,
+                             stringsAsFactors =  FALSE)
+      },
+      error = function(e) {
+        # return a safeError if a parsing error occurs
+        stop(safeError(e))
+      })
+    #####
+    if (input$reformat == "none") {
+      df <- format_none(df_input)
+    } else if (input$reformat == "qTower") {
+      df <- format_none(df_input)
+      #df <- format_qTower(df_input)
+    } else if (input$reformat == "biorad") {
+      df <- format_biorad(df_input)
+    } else if (input$reformat == "stratagene") {
+      df <- format_stratagene(df_input)
+    }
+    df <- mutate_all(df, as.numeric)
+    df
+    #)
+  })
+  
+  data_raw_2 <- reactive({
+    if (input$cycle_to_T == FALSE) {
+      data_raw()
+    }  else {
+      df_copy <- data.frame(data_raw()[1])
+      Temps_calc <- cycle_to_T_func(as.numeric(input$start_T), as.numeric(input$increment_T), data_raw())
+      df <- dplyr::bind_cols(Temps_calc, data_raw())
+      df[-2]
+      } 
+  })
+  
+  sampleFile <- read_csv("sample_file.csv") # the sample formatting file for download
+  
+  # end Uplading user data-----------------------------------------------------------------------------------------------     
+  # Downloadable csv of selected dataset --------------------------------------------------------------------------------  
+  output$samplefile <- downloadHandler(
+    filename = "sample_formatted_data.csv",
+    content = function(file) {
+      write.csv(sampleFile, file, row.names = FALSE)
+    }
+  )
+  
+  # Quick-download of apparent Tms from the analysis page 
+  output$Tmapp_quick <- downloadHandler(
+    filename = "Tm_apparent.csv",
+    content = function(file) {
+      write.csv(sampleFile, file, row.names = FALSE)
+    }
+  )
+  
+  output$instructions <- renderUI({
+    infile <- input$file1  
+    if (is.null(infile) == FALSE ) {  # if there an input file
+      return(NULL) } else {
+        HTML(
+          paste("<h3>Upload instructions</h3>",
+                " <h4>To analyze your data, please upload it using the grey panel at left, and the following instructions. <strong>Once uploaded, a preview of the file will appear here. </strong></h4>",
+                " <h4> Format data prior to uploading</h4>",
+                " -   Files must be in <strong>.tsv or .csv format </strong> (convert excel files by save-as:  'CSV UTF-8')",
+                " -   The first column contains the Temperatures (not cycle number!) of each measurement",
+                " -   The following columns contain the raw fluorescence measurements for each reaction to be analyzed",
+                "(an example can be downloaded below)",
+                "",
+                "<h4>DSF world can do this for you, depending on the instrument used</h4>",
+                "For the instruments listed at left under <strong>Supported reformatting</strong>, data (in .csv) can be uploaded in the format exported directly from the instrument. Prior to analysis, select the button for the appropriate instrument. Export formats may differ depending on the age of the instrument and associated software, so please ensure that your data has indeed been correctly reformatted. ",
+                "",
+                "If you would like supported reformatting for your instrument, you can request that it be added by sending an email to dsfworldUCSF@gmail.com with the subject line 'Reformatting request: instrument name' and attach an example file as exported directly from the instrument. We will attempt to add supported reformatting for your instrumment; thanks for your patience on such requests!",
+                " ",
+                " ",
+                
+                sep = "<br/>")
+        ) }
+  })
+  
+  output$contents <- DT::renderDataTable({
+    infile <- input$file1 
+    if (is.null(infile) == TRUE ) { # if there is no input file
+      return(NULL) # leave "contents" empty (display instead the uploading instructions)
+    } else {
+      return((data_raw_2())) # otherwise, assign the uploaded file to data_raw()  
+      # options = list(
+      #   autowidth = FALSE)
+    }
+  }
+
+  )
+
+  # End of downloadable csv of selected dataset
+  
+# Set names and replicates -----------------------------------------------------------------------------------------
+  name_table <- reactive({df <- data.frame( "Original" = names( data_unnamed() ), "New" = names(data_unnamed()), "Well" = names(data_unnamed()), stringsAsFactors = FALSE )})
+  name_table_cp <- reactive({df <- data.frame( "Original" = names( data_unnamed() ), "New" = names(data_unnamed()), "Well" = names(data_unnamed()), stringsAsFactors = FALSE )})
+  output$hot_names_output <- renderRHandsontable({rhandsontable(name_table(), height = 600, useTypes = TRUE) %>% hot_col("Original", readOnly = TRUE) }) # place in a handsontable
+  
+  new_names_1 <- reactive({ # whenever rhanson table is updated, update the associated data frame
+    if (input$goButton == 0) { df <- name_table_cp()
+    } else { name_table <- isolate(hot_to_r(input$hot_names_output))}
+    # input$goButton
+    # name_table <- isolate(hot_to_r(input$hot_names_output))
+  })
+  
+  output$new_names_1rendered <- renderDataTable(new_names_1())
+  
+  filled_names <- reactive(no_name(new_names_1()))
+ 
+# Data analysis #-----------------------------------------------------------------------------------------------
+Temps <- reactive(data_raw_2()[,1]) # extract temperature column
+data_unnamed <- reactive(as_tibble(data_raw_2()[,-1])) # remove temperature column from data
+merged_names <- reactive(merge_names(new_names_1()))
+data <- reactive(set_names(data_unnamed(), nm = merged_names()))# rename the dataframe according to the handsontable
+Tms <- reactive(find_Tm(Temps(), as_tibble(data_sgd0()[,-1]))) # calculate Tms from the smoothed data
+Tms_boltz <- reactive(find_Tm_boltz(Temps(), data_trunc_at_max()[,-1])) # calculate Tms from the smoothed data using boltzmann fitting
+
+data_sgd0_melt <- reactive(melt_df(as_tibble(data_sgd0()[,-1]), Temps())) # melted for plotting 
+data_sgd1_melt <- reactive(melt_df(as_tibble(data_sgd1()[,-1]), Temps())) # melted for plotting 
+Tms_melt <- reactive(melt_df_Tm(as_tibble(Tms()))) # melted for tip-tool in plate-view plots
+
+df_raw_mean <- reactive(take_data_mean(data()[,-1], filled_names()  ))
+df_raw_sd <- reactive(take_data_sd(data()[,-1], filled_names()))
+df_mean <- reactive(take_data_mean(data_sgd0()[,-1], filled_names()  )) # take mean of assigned replicates for plots 
+df_sd <- reactive(take_data_sd(data_sgd0()[,-1], filled_names())) # take the sd assigned replicates for plots 
+df_sgd1_mean <- reactive(take_data_mean(data_sgd1()[,-1], as_tibble(filled_names()))) # take mean of assigned replicates for plots 
+df_sgd1_sd <- reactive(take_data_sd(data_sgd1()[,-1], as_tibble(filled_names()))) # take the sd assigned replicates for plots 
+
+Tm_mean <- reactive(find_Tm_mean(Tms(), filled_names()))
+Tm_mean_boltz <- reactive(find_Tm_mean_boltz(Tms_boltz(), filled_names()))
+
+# End data analysis   ------------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------------------
+# Displaying data
+graph_1 <- reactive({ # first graph
+  switch(input$dataset_3,
+         "Raw data" = plot_all_cols(as_tibble(data_sgd0()[,-1]), Temps(), "Smoothed raw data", "RFU"), 
+         "First derivative" = plot_all_cols(as_tibble(data_sgd1()[,-1]), Temps(), "First derivative", "dRFU/dT"), 
+         "Plate-view heat map (must define wells)" =   plate_plot(Tms(), filled_names(), input$platetype), 
+         "Raw data, replicates averaged (slow for large datasets)" = gathered_plot(tibble("Temperature" = Temps()), as_tibble(df_mean()), as_tibble(df_sd()), "Raw data, averaged by replicate"), 
+         "First derivative, replicates averaged (slow for large datasets)" = gathered_plot(tibble("Temperature" = Temps()), as_tibble(df_sgd1_mean()), as_tibble(df_sgd1_sd()), "First derivative, averaged by replicate")
+  )
+})
+
+output$graph1_render <- renderPlot({graph_1()}, bg="transparent") # render for plotting
+
+graph_2 <- reactive({ # second graph
+  switch(input$dataset_4,
+         "Raw data" = plot_all_cols(as_tibble(data_sgd0()[,-1]), Temps(), "Smoothed raw data", "RFU"), #
+         "First derivative" = plot_all_cols(as_tibble(data_sgd1()[,-1]), Temps(), "Smoothed raw data", "RFU"), 
+         "Plate-view heat map (must define wells)" =   plate_plot(Tms(), filled_names(), input$platetype), 
+         "Raw data, replicates averaged (slow for large datasets)" = gathered_plot(tibble("Temperature" = Temps()), as_tibble(df_mean()), as_tibble(df_sd()), "Raw data, averaged by replicate"), 
+         "First derivative, replicates averaged (slow for large datasets)" = gathered_plot(tibble("Temperature" = Temps()), as_tibble(df_sgd1_mean()), as_tibble(df_sgd1_sd()), "First derivative, averaged by replicate")
+  )
+})
+
+output$graph2_render <- renderPlot({graph_2()}, bg="transparent") # render for plotting
+
+tm_table <- reactive({
+  switch(input$Tm_type,
+         "First derivative" =   Tm_mean(), # first derivative dataset
+         "Boltzmann sigmoid (~10 seconds/condition, not recommended for large datasets)" = Tm_mean_boltz() # boltzmann dataset 
+          )
+})
+
+output$tm_table_render <- renderDataTable(tm_table())
+
+# -----------------------------------------------------------------------------------------------
+## start tip tool
+
+# determine the data needed to create the tip tool
+tip_1 <-   reactive({ # for the first plot
+  switch(input$dataset_3,
+         "Raw data" = data_sgd0_melt(), 
+         "First derivative" = data_sgd1_melt(), 
+         "Plate-view heat map (must define wells)" =   data_sgd1_melt(), # place-holder; shouldn't show anything
+         "Raw data, replicates averaged (slow for large datasets)" = data_sgd1_melt(), # place-holder; shouldn't show anything
+         "First derivative, replicates averaged (slow for large datasets)" = data_sgd1_melt() # place-holder; shouldn't show anything
+  )
+})
+
+tip_2 <-   reactive({ # for the second plot
+  switch(input$dataset_4,
+         "Raw data" = data_sgd0_melt(),
+         "First derivative" = data_sgd1_melt(),
+         "Plate-view heat map (must define wells)" =   data_sgd1_melt(), # place-holder; shouldn't show anything
+         "Raw data, replicates averaged (slow for large datasets)" = data_sgd1_melt(), # place-holder; shouldn't show anything
+         "First derivative, replicates averaged (slow for large datasets)" = data_sgd1_melt() # place-holder; shouldn't show anything
+  )
+})
+
+
+output$hover_info1 <- renderUI({ # create the tip tool for the first plot
+  hover <- input$plot_hover1
+
+  point <- nearPoints(tip_1(), hover, threshold = 5, maxpoints = 1, addDist = TRUE, xvar = "Temperature", yvar = "value")
+  
+  if (nrow(point) == 0) return(NULL)
+  Tm_point <- call_Tm(point$variable, Tms())
+  coords <- paste0("(", round(hover$x, digits = 1), ", ", round(hover$y, digits = 1), ")")
+  
+  #nearPoints(mtcars, input$plot_click, xvar = "wt", yvar = "mpg")
+  
+  # calculate point position INSIDE the image as percent of total dimensions
+  # from left (horizontal) and from top (vertical)
+  left_pct <- (hover$x - hover$domain$left) / (hover$domain$right - hover$domain$left)
+  top_pct <- (hover$domain$top - hover$y) / (hover$domain$top - hover$domain$bottom)
+  
+  # calculate distance from left and bottom side of the picture in pixels
+  left_px <- hover$range$left + left_pct * (hover$range$right - hover$range$left)
+  top_px <- hover$range$top + top_pct * (hover$range$bottom - hover$range$top)
+  
+  # create style property fot tooltip
+  # background color is set so tooltip is a bit transparent
+  # z-index is set so we are sure are tooltip will be on top
+  style <- paste0("position:absolute; z-index:100; background-color: rgba(245, 245, 245, 0.85); ",
+                  "left:", left_px + 2, "px; top:", top_px + 2, "px;")
+  
+  # actual tooltip created as wellPanel
+  wellPanel(
+    style = style,
+    p(HTML(paste0("<b> Well: </b>", point$variable, "<br/>",
+                  "<b> Tm: </b>", Tm_point, "<br/>",
+                  "<b></b>", coords, "<br/>"
+                  #"<b> Distance from left: </b>", left_px, "<b>, from top: </b>", top_px
+    )))
+  )
+})
+
+output$hover_info2 <- renderUI({
+  hover <- input$plot_hover2
+  #point <- nearPoints(data_sgd1_melt(), hover, threshold = 5, maxpoints = 1, addDist = TRUE, xvar = "Temperature", yvar = "value")
+
+  point <- nearPoints(tip_2(), hover, threshold = 5, maxpoints = 1, addDist = TRUE, xvar = "Temperature", yvar = "value")
+  
+  
+  if (nrow(point) == 0) return(NULL)
+  Tm_point <- call_Tm(point$variable, Tms())
+  coords <- paste0("(", round(hover$x, digits = 1), ", ", round(hover$y, digits = 1), ")")
+  
+  #nearPoints(mtcars, input$plot_click, xvar = "wt", yvar = "mpg")
+  
+  # calculate point position INSIDE the image as percent of total dimensions
+  # from left (horizontal) and from top (vertical)
+  left_pct <- (hover$x - hover$domain$left) / (hover$domain$right - hover$domain$left)
+  top_pct <- (hover$domain$top - hover$y) / (hover$domain$top - hover$domain$bottom)
+  
+  # calculate distance from left and bottom side of the picture in pixels
+  left_px <- hover$range$left + left_pct * (hover$range$right - hover$range$left)
+  top_px <- hover$range$top + top_pct * (hover$range$bottom - hover$range$top)
+  
+  # create style property fot tooltip
+  # background color is set so tooltip is a bit transparent
+  # z-index is set so we are sure are tooltip will be on top
+  style <- paste0("position:absolute; z-index:100; background-color: rgba(245, 245, 245, 0.85); ",
+                  "left:", left_px + 2, "px; top:", top_px + 2, "px;")
+  
+  # actual tooltip created as wellPanel
+  wellPanel(
+    style = style,
+    p(HTML(paste0("<b> Well: </b>", point$variable, "<br/>",
+                  "<b> Tm: </b>", Tm_point, "<br/>",
+                  "<b></b>", coords, "<br/>"
+                  #"<b> Distance from left: </b>", left_px, "<b>, from top: </b>", top_px
+    )))
+  )
+})
+
+## end tip tool
+
+  # End: plotting data
+  # -----------------------------------------------------------------------------------------------
+  # Begin: data modeling
+  
+
+  # dG modeling
+  # generate reactive modeled data
+  df_dG_model <- reactive(
+    dG_model(dHu = input$dHu_2, T_half = input$T_half_2, Temperatures_dG = Temperatures_dG, dCp = input$dCp, Nres = input$Nres))
+  
+  # create plot output
+  output$dG_model_plot <- renderPlot({
+    gA <- ggplotGrob(plot_dG(df_dG_model()))
+    gB <- ggplotGrob(plot_folded(df_dG_model()))
+    grid::grid.newpage()
+    grid::grid.draw(gtable_rbind(gA, gB))
+  })
+
+
+  # DSF modeling
+  # generate reactive modeled data (separated to avoid unnecessary re-rendering)
+df_model <- reactive( melt_model(E = input$E, Temperatures = Temperatures, input$T_star, dHu = input$dHu, T_half = input$T_half, v = input$v, lowT = 273) )
+df_dsf <- reactive( dsf_model(Temperature = df_model()$Temperature, xN = df_model()$xN, xU = df_model()$xU, xF = df_model()$xF, nN = input$n_N, nU = input$n_U, nF = input$n_F) )
+  
+ # create plot output
+  output$dsf_model_plot <- renderPlot({
+    melt_model <- ggplotGrob(plot_melt_model(df_model()))
+    dsf_model <- ggplotGrob(plot_dsf_model(df_dsf()))
+    dsf_dRFU <- ggplotGrob(plot_dsf_model_2(df_dsf()))
+    grid::grid.newpage()
+    grid::grid.draw(gtable_rbind(melt_model, dsf_model, dsf_dRFU))
+  })
+  
+  # output$dsf_model <- renderPlot(  dsf_model(E = input$E, Temperatures = Temperatures, T_star = input$T_star, dHu = input$dHu, T_half = input$T_half, v = input$v, lowT = 273, nN = input$n_N, nU = input$n_U, nF = input$n_F) )
+  # output$dG_model <- renderPlot(  delG_model(Temperatures = Temperatures_dG, dHu = input$dHu_2, T_half = input$T_half_2, dCp = input$dCp, Nres = input$Nres) )
+  # # -----------------------------------------------------------------------------------------------
+  #### for downloading data file #####
+ # make downloadable (Temperature-bound) versions of the data
+
+
+  
+  
+  # used only for quick-downloads
+  data_sgd0_mean_interc <- reactive( { # make the smoothed data available for downloading
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df_interc <- intercalate(df_mean(), df_sd())
+    df <- dplyr::bind_cols(Temps_copy, df_interc)
+  }) 
+  
+  data_sgd1_mean_interc <- reactive( { # make the smoothed data available for downloading
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df_interc <- intercalate(df_sgd1_mean(), df_sgd1_sd())
+    df <- dplyr::bind_cols(Temps_copy, df_interc)
+  }) 
+  
+  
+  # for supplemental download files
+  data_sgd0 <- reactive( { # make the smoothed data available for downloading
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df <- take_sgd0(as_tibble(data()), Temps()) 
+    df <- dplyr::bind_cols(Temps_copy, df)
+  }) 
+  
+  data_sgd1 <- reactive( { # make the first derivative available for downloading
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df <- take_sgd1(data(), Temps()) 
+    df <- dplyr::bind_cols(Temps_copy, df)
+  }) 
+  
+  renamed_df_raw <- reactive( { # make the re-named data available for downloading
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df <- dplyr::bind_cols(Temps_copy, data())
+  }) 
+  
+  data_trunc_at_max <- reactive( { # data, truncated at the maximum value, because sometimes people want this to do their own sigmoid fitting (like in prism)
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df <- trunc_at_max(as_tibble(data_sgd0())[,-1])
+    df <- dplyr::bind_cols(Temps_copy, df)
+  })
+  
+  data_mean_trunc_at_max <- reactive( { # data, truncated at the maximum value, because sometimes people want this to do their own sigmoid fitting (like in prism)
+    Temps_copy <- data.frame("Temperature" = Temps())
+    df <- trunc_at_max(as_tibble(df_mean())[,-1])
+    df <- dplyr::bind_cols(Temps_copy, df)
+  })
+  
+  # Reactive value for selected dataset ----
+  datasetInput1 <- reactive({
+    switch(input$dataset1,
+           "Melting temperatures (by first derivative)" = Tm_mean(),
+           "Melting temperatures (by Boltzmann--slow for large datasets)" = Tm_mean_boltz(), 
+           "Smoothed raw data (RFU vs T)" = data_sgd0_mean_interc(),
+           "First derivative of smoothed (dRFU/dT vs T)" = data_sgd1_mean_interc()
+    )
+  })
+  
+  datasetInput2 <- reactive({
+    switch(input$dataset2,
+           "Melting temperatures (by first derivative), no replicate averaging" = Tms(),
+           "Melting temperatures (by Boltzmann--slow for large datasets), no replicate averaging" = Tms_boltz(),
+           "Smoothed raw data (RFU vs T), no replicate averaging" = data_sgd0(),
+           "First derivative of smoothed (dRFU/dT vs T), no replicate averaging" = data_sgd1(),
+           "Unsmoothed raw data (RFU vs T), no replicate averaging" = renamed_df_raw(),
+           "Smoothed data truncated at maximum (useful for sigmoid fitting), replicate-averaged" = data_mean_trunc_at_max(),
+           "Smoothed data truncated at maximum (useful for sigmoid fitting), no replicate averaging" = data_trunc_at_max()
+    )
+  })
+  
+  # Table of selected dataset ----
+  output$table_set1 <- renderDataTable({
+    datasetInput1()
+  })
+  
+  output$table_set2 <- renderDataTable({
+    datasetInput2()
+  })
+  
+  
+  # Downloadable csv of selected dataset ----
+  output$downloadData1 <- downloadHandler(
+    filename = function() {
+      paste(input$dataset1, ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(datasetInput1(), file, row.names = FALSE)
+    }
+  )
+  
+  output$downloadData2 <- downloadHandler(
+    filename = function() {
+      paste(input$dataset2, ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(datasetInput2(), file, row.names = FALSE)
+    }
+  )
+  #### end downloading data file #####
+  # -----------------------------------------------------------------------------------------------
+  
+  
+  # -----------------------------------------------------------------------------------------------
+  ### start mathjacks ###
+  output$ex1 <- renderUI({
+    withMathJax(helpText('Dynamic output 1:  $$\\alpha^2$$'))
+  })
+  output$ex2 <- renderUI({
+    withMathJax(
+      helpText('and output 2 $$3^2+4^2=5^2$$'),
+      helpText('and output 3 $$\\sin^2(\\theta)+\\cos^2(\\theta)=1$$')
+    )
+  })
+  output$ex3 <- renderUI({
+    withMathJax(
+      helpText('The busy Cauchy distribution
+               $$\\frac{1}{\\pi\\gamma\\,\\left[1 +
+               \\left(\\frac{x-x_0}{\\gamma}\\right)^2\\right]}\\!$$'))
+  })
+  output$ex5 <- renderUI({
+    if (!input$ex5_visible) return()
+    withMathJax(
+      helpText('You do not see me initially: $$e^{i \\pi} + 1 = 0$$')
+    )
+  })
+  
+  ### end mathjacks
+  # -----------------------------------------------------------------------------------------------
+  
+  
+  # -----------------------------------------------------------------------------------------------
+  
+  ## descriptions
+  output$aboutanalysis <- renderUI({
+    HTML(
+    paste(#"<h1> Welcome to the DSF world data analysis page! </h1>",
+    "<h2>Overview.</h2>",
+    "This website analyzes DSF data. It accepts raw Temperature vs Fluorescence data, and exports apparent melting temperatures for them.",
+    "",
+    "Most DSF data can be easily analyzed using either of two general approaches—first derivative and sigmoid fitting—described below. (This website supports both.) These different analysis methods don’t represent conflicting interpretations of DSF data; rather, they are different mathematical approaches which--for most DSF data--return the same thing (the inflection point of the melting transition) and can be used interchangeably.",
+    "",
+    "<strong>Method 1:</strong> the first derivative of the raw data can be taken with respect to temperature, and the Tm is defined as the maximum of the first derivative. This website can extract up to a triple transition using this method.",
+    "<strong> Method 2: </strong> the fluorescence versus temperature data can be fit to a sigmoid, and the Tm is defined as the inflection point of the fitted sigmoid. Typically, the sigmoid used is a Boltzmann sigmoid, though many other sigmoid equations exist and could, in theory, be used. This website can extract up to a double-transition using this method.",
+    "",
+    "If you want to extract more than three transitions from your data, you can email us at dsfworldUCSF@gmail.com and we might be able to help you out. As always, thanks in advance for your patience regarding requests sent to DSF world. ",
+    "",
+    "Check out the interactive data modeling section of this website to learn more about the theory behind the sigmoidal shape of DSF data!",
+    "",
+    "In case the analyses currently supported at DSF world aren’t exactly what you are looking for, a variety of potentially useful versions of the uploaded data (e.g. re-formatted, smoothed, truncated at the maximum value) are available for download alongside the apparent melting temperatures calculated here.",
+    "<h2>Description of downloadable results.</h2>",
+    "<strong>Melting temperatures from first derivative: </strong>the apparent melting temperature of each reaction, calculated from the maximum of the first derivative.",
+    "<strong>Melting temperatures from Boltzmann fit: </strong> the apparent melting temperature of each reaction, calculated from the inflection point of the Boltmann sigmoidal fit.",
+    "<strong>Raw data:</strong> the uploaded data file, unchanged save for any supported reformatting completed on the “uploads” page",
+    "<strong>Smoothed data:</strong> the data smoothed over a three-degree window using a second-order Savistky-Golay filter.",
+    "<strong>First derivative: </strong> the first derivative of the data, calculated using second-order Savitsky-Golay first derivative.",
+    "<strong>Data truncated at maximum: </strong> the smoothed data, data in each column truncated at the maximum value. Truncated data can be used for sigmoid fitting outside of this website, if desired. ",
+    
+    "<h2>Analysis details.</h2>",
+    "<strong> First derivative </strong>",
+    " 1. Data is smoothed over an (approximately) three-degree window using a second-order Savitsky-Golay filter, and the first derivative at each position is calculated from the Savitsky-Golay fit.",
+    " 2.    The number of transitions (1, 2, or 3) is detected **not yet written**",
+    "3. Often, the Tm will lie between two measured temperatures. To interpolate to this temperature from the collected data points, the three-degree window surrounding the maximum of the first derivative is extracted and fit to a line of the equation y = m*x + b. The y-intercept of this equation is solved and defined as the Tm.",
+    "-  Exceptions: if the resulting Tm is outside of the measured temperatures, no Tm is returned.",
+    "",
+    "<strong> Boltzmann sigmoid fit **this description has not been completed yet!!** </strong>",
+    "This website uses the R package “sicegar” for Boltzmann fitting. Detailed documentation on sigecar can be found at:  https://cran.r-project.org/web/packages/sicegar/sicegar.pdf . Briefly:",
+    "1. The number of transitions (0, 1, or 2) is determined",
+    "2. The data is fit to either a single or a double Boltzmann sigmoid",
+    "3. The V50 is extracted and defined as the Tm. ",
+    "",
+    "",
+    "",
+    "",
+    "",
+    sep = "<br/>"
+  ) 
+  )# end HTML for about the analysis page
+  })
+  
+  output$homepage_text <- renderUI({
+    HTML(
+      paste("<h2><strong> Welcome, second-round beta testers! Thank you!! </h2></strong>",
+        "Thanks also for your patience; this update has been a long time coming!",
+        "",
+        "<strong>Updates</strong>",
+        "-   Replicate handling now supported  ",
+        "-  Tm calling by either first derivative or Boltzmann sigmoid",
+        "-   Boltzmann sigmoid fitting should be able to  auto-detect double transitions and report two Tms accordingly. This feature is pretty slow, which I may work on improving (if it’s really an issue I can add a “single transition only” fit, which should be faster—let me know if this is important to you!)",
+        "-   There are also some new plots (like plate-view), and extended possible data formats for downloading",
+        "-   To the data modeling section some draft descriptions have been added, as well as mouse-overs for the user-tuned parameters for the model",
+        "",
+        "<strong>On the way</strong>",
+        "-   Background subtraction (@Chimno and Matt)",
+        "-   Aesthetic details, like less wonky scrolling and a real welcome page",
+        "-   Potential weird behaviors if given empty columns, I’ll deal with that in the next update",
+        "",
+        "<strong>I'd especially love our feedback on</strong>",
+        "-   If anything doesn’t work how it seems like it should or throws an error",
+        "-   What functions this doesn’t have that you’d like",
+        "-   How intuitive or not the different features are",
+        "-   Anything you don’t like",
+        "-   Anything you do like ",
+        "",
+        "As always: taiawu@gmail.com, or 360 927 0262 or fine me wherever. Thanks!!",
+        sep = "<br/>"
+      ) 
+    )# end HTML for about the analysis page
+  })
+  
+  output$modelpage_text <- renderUI({
+    HTML(
+      paste("<h2><strong> Welcome to the theoretical modeling section of DSFworld! </h2></strong>",
+            "This section is meant to illustrate the interplay between the thermodynamics and kinetics of protein unfolding, and how these may vary with temperature.",
+            "",
+            "There are two sections: First, a DSF data model which incorporates thermodynamics, kinetics, and dye binding. Second, a purely thermodynamic model of how delta G may change with temperature, and how this relationship can depend on protein properties. ",
+            sep = "<br/>"
+      ) 
+    )# end HTML for about the analysis page
+  })
+  
+}
+
+shinyApp(ui, server)
