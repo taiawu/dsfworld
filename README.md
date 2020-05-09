@@ -15,6 +15,14 @@ as well as the associated scripts, and modularized mini web application
 for each of the individual tasks handled at DSFworld (uploading,
 layouts, plotting, analysis, and downloads.)
 
+  - 0_full_app contains the full DSFworld application
+  - 1_upload_raw contains the data uploading the pre-formatting module 
+  - 2_add_layouts contains the data labeling module
+  - 3_plot contains the interactive plotting module
+  - 4_analyze contains the Tma analyses (dRFU, fits 1-4, and BIC) module 
+  - 5_download contains the data and results downloading module
+  - The interactive DSF data model can be found in the 0_full_app > scripts > data_modeling.R
+
 The DSFworld website is presented as a part of a larger publication
 entitled “Three Essential Resources to Improve Differential Scanning
 Flourimetry (DSF) Experiments”. The full text of this paper and its
